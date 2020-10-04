@@ -72,7 +72,9 @@ const updateMetadata = ({metadata, fieldsDefault = {}, fieldsMapper = {}}) => {
     try {
       // Try to convert description from YAML
       const descriptionObject = convertYamlToObject(metadata.description)
-      metadata = {...metadata, ...descriptionObject}
+      if (typeof descriptionObject !== "string") {
+        metadata = {...metadata, ...descriptionObject}
+      }
     } catch (e) {
       // Description field is not valid YAML
       // Do not throw an error
