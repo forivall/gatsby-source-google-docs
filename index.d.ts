@@ -36,6 +36,7 @@ export interface Options {
    * Compute extra data for each document
    */
   updateMetadata?: (metadata: any) => any
+  listImages?: boolean
   /**
    * For a better stack trace and more information
    * Usefull when you open a issue to report a bug
@@ -52,16 +53,19 @@ export interface RawFolder extends drive_v3.Schema$File {
 }
 
 export interface Metadata extends DocumentFile {
-  id?: DocumentFile['id'];
+  id: NonNullable<DocumentFile['id']>;
   /** The filename, like path.basename(filepath) */
   name: string;
   path: string;
+  parentPath: string;
+  images?: drive_v3.Schema$File[];
   description?: string | object;
   content: any[];
   cover: {
       image: any;
       title: any;
       alt: any;
+      image___NODE?: any;
   };
   markdown: string;
   breadcrumb: string[];

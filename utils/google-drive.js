@@ -10,6 +10,13 @@ const {convertYamlToObject} = require("./converters")
 
 const MIME_TYPE_DOCUMENT = "application/vnd.google-apps.document"
 const MIME_TYPE_FOLDER = "application/vnd.google-apps.folder"
+const MIME_TYPE_IMAGE_PREFIX = "image/"
+
+/**
+ * @param {import('googleapis').drive_v3.Schema$File} file
+ * @returns {file is import("..").DocumentFile}
+ */
+const isDocument = (file) => file.mimeType === MIME_TYPE_DOCUMENT
 
 /**
  * @template T
@@ -27,7 +34,7 @@ function evenlyChunk(arr, count) {
 
 /**
  * @param {object} options
- * @param {Partial<import('..').Metadata>} options.metadata
+ * @param {import('..').Metadata} options.metadata
  * @param {Record<string, unknown>=} options.fieldsDefault
  * @param {Record<string, string>=} options.fieldsMapper
  */
@@ -98,6 +105,7 @@ async function getGdrive() {
  * @property {string | null} id
  * @property {string[]} breadcrumb
  * @property {string} path
+ * @property {import('googleapis').drive_v3.Schema$File[]=} images
  */
 
 /**
@@ -106,35 +114,34 @@ async function getGdrive() {
  * @property {DocumentFetchParent[]} parents
  */
 
-// 10 per 1.5 seconds.
-const rateLimit = wyt(10, 1500)
-const BATCH_SIZE = 100
+/**
+ * @typedef {import('..').DocumentFile &
+ *   Pick<import("..").Metadata, 'path' | 'parentPath' | 'images'>
+ * } FetchedDocument
+ */
+
+// 10 per 2 seconds.
+const rateLimit = wyt(10, 2000)
+const BATCH_SIZE = 25
 /**
  * @param {import('..').Options & FetchDocumentsOptions} options
- * @returns {Promise<(import('..').DocumentFile & { path: string })[]>}
+ * @returns {Promise<FetchedDocument[]>}
  */
-async function fetchDocuments({
-  drive,
-  debug,
-  parents,
-  fields,
-  ignoredFolders = [],
-}) {
+async function fetchDocuments({drive, parents, ...options}) {
   if (parents.length > BATCH_SIZE) {
     return _flatten(
       await Promise.all(
         evenlyChunk(parents, BATCH_SIZE).map((parents) =>
           fetchDocuments({
             drive,
-            debug,
             parents,
-            fields,
-            ignoredFolders,
+            ...options,
           })
         )
       )
     )
   }
+  const {debug, fields, ignoredFolders = [], listImages} = options
 
   const waited = await rateLimit()
   if (debug) {
@@ -152,32 +159,54 @@ async function fetchDocuments({
       ? false
       : parents.map((p) => `'${p.id}' in parents`).join(" or ")
 
+  const mimetypeFilters = [MIME_TYPE_FOLDER, MIME_TYPE_DOCUMENT].map(
+    (m) => `mimeType='${m}'`
+  )
+  if (listImages) {
+    mimetypeFilters.push(`mimeType contains '${MIME_TYPE_IMAGE_PREFIX}'`)
+  }
+  const mimetypeQuery = mimetypeFilters.join(" or ")
+
   const query = {
     includeTeamDriveItems: true,
     supportsAllDrives: true,
     q: `${
       parentQuery ? `(${parentQuery}) and ` : ""
-    }(mimeType='${MIME_TYPE_FOLDER}' or mimeType='${MIME_TYPE_DOCUMENT}') and trashed = false`,
+    }(${mimetypeQuery}) and trashed = false`,
     fields: `nextPageToken,files(id, mimeType, name, description, createdTime, modifiedTime, starred, parents${
       fields ? `, ${fields.join(", ")}` : ""
     })`,
   }
   const res = await drive.files.list(query)
+  let documents = res.data.files.filter(isDocument)
 
   /** @param {typeof res.data.files} files */
-  const collectDocuments = (files) =>
-    files
-      .filter(
-        /** @returns {file is import("..").DocumentFile} */
-        (file) => file.mimeType === MIME_TYPE_DOCUMENT
-      )
-      .map((file) => {
+  const addImagesToParents = (files) => {
+    for (const file of files) {
+      if (file.mimeType.startsWith(MIME_TYPE_IMAGE_PREFIX)) {
         const parentIds = file.parents && new Set(file.parents)
         const parent = parentIds && parents.find((p) => parentIds.has(p.id))
-        const parentPath = (parent && parent.path) || ""
-        return {...file, path: `${parentPath}/${_kebabCase(file.name)}`}
-      })
-  let documents = collectDocuments(res.data.files)
+        if (parent) {
+          ;(parent.images || (parent.images = [])).push(file)
+        }
+      }
+    }
+  }
+  addImagesToParents(res.data.files)
+
+  /** @param {import("..").DocumentFile} file */
+  const finalizeDocument = (file) => {
+    const parentIds = file.parents && new Set(file.parents)
+    const parent = parentIds && parents.find((p) => parentIds.has(p.id))
+    const parentPath = (parent && parent.path) || ""
+    return {
+      ...file,
+      images: parent.images,
+      path: `${parentPath}/${_kebabCase(file.name)}`,
+      parentPath,
+      rawParentPath: parent.breadcrumb.join("/"),
+    }
+  }
 
   /** @param {typeof res.data.files} files */
   const collectParents = (files) => {
@@ -209,19 +238,17 @@ async function fetchDocuments({
 
   if (!res.data.nextPageToken) {
     if (nextParents.length === 0) {
-      return documents
+      return documents.map(finalizeDocument)
     }
     const documentsInFolders = await fetchDocuments({
       drive,
-      debug,
       parents: nextParents,
-      fields,
-      ignoredFolders,
+      ...options,
     })
-    return [...documents, ...documentsInFolders]
+    return [...documents.map(finalizeDocument), ...documentsInFolders]
   }
 
-  /** @type {typeof documents} */
+  /** @type {FetchedDocument[]} */
   let documentsInFolders = []
 
   const fetchOneParentsBatch = async () => {
@@ -230,15 +257,16 @@ async function fetchDocuments({
     nextParents = nextParents.slice(BATCH_SIZE)
     const results = await fetchDocuments({
       drive,
-      debug,
       parents: parentBatch,
-      fields,
-      ignoredFolders,
+      ...options,
     })
     documentsInFolders = [...documentsInFolders, ...results]
   }
 
-  /** @param {string} nextPageToken */
+  /**
+   * @param {string} nextPageToken
+   * @returns {Promise<FetchedDocument[]>}
+   */
   const fetchNextPage = async (nextPageToken) => {
     await rateLimit()
     console.info(`source-google-docs: nextPage`)
@@ -246,21 +274,24 @@ async function fetchDocuments({
       ...query,
       pageToken: nextPageToken,
     })
-    documents = [...documents, ...collectDocuments(nextRes.data.files)]
+    documents = [...documents, ...nextRes.data.files.filter(isDocument)]
+    addImagesToParents(nextRes.data.files)
     nextParents = [...nextParents, ...collectParents(nextRes.data.files)]
 
     if (!nextRes.data.nextPageToken) {
       if (nextParents.length === 0) {
-        return documents
+        return documents.map(finalizeDocument)
       }
       const finalDocumentsInFolders = await fetchDocuments({
         drive,
-        debug,
         parents: nextParents,
-        fields,
-        ignoredFolders,
+        ...options,
       })
-      return [...documents, ...documentsInFolders, ...finalDocumentsInFolders]
+      return [
+        ...documents.map(finalizeDocument),
+        ...documentsInFolders,
+        ...finalDocumentsInFolders,
+      ]
     }
 
     const nextPagePromise = fetchNextPage(nextRes.data.nextPageToken)

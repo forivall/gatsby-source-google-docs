@@ -1,5 +1,9 @@
 const {fetchGoogleDocsDocuments} = require("./google-docs")
 
+/**
+ * @param { import("gatsby").SourceNodesArgs } args
+ * @param { import("..").Options } pluginOptions
+ */
 exports.sourceNodes = async (
   {actions: {createNode}, createContentDigest, reporter},
   pluginOptions

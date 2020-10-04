@@ -1,3 +1,4 @@
+/** @param { import("gatsby").CreateSchemaCustomizationArgs } args */
 exports.createSchemaCustomization = ({actions}) => {
   const {createTypes} = actions
   const typeDefs = `

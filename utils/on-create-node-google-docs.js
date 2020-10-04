@@ -2,6 +2,7 @@ const {createRemoteFileNode} = require("gatsby-source-filesystem")
 
 const GOOGLE_IMAGE_REGEX = /https:\/\/[a-z0-9]*.googleusercontent\.com\/[a-zA-Z0-9_-]*/
 
+/** @param { import("gatsby").CreateNodeArgs<import('..').Metadata> } args */
 exports.onCreateNodeGoogleDocs = async ({
   node,
   actions: {createNode, createNodeField},

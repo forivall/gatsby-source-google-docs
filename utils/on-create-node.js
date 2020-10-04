@@ -1,32 +1,14 @@
 const {onCreateNodeGoogleDocs} = require("./on-create-node-google-docs")
 const {onCreateNodeMarkdownRemark} = require("./on-create-node-markdown-remark")
 
-exports.onCreateNode = async ({
-  node,
-  actions,
-  store,
-  cache,
-  createNodeId,
-  createContentDigest,
-  reporter,
-}) => {
+/** @param { import("gatsby").CreateNodeArgs<any> } args */
+exports.onCreateNode = async (args) => {
+  const {node} = args
   if (node.internal.type === "GoogleDocs") {
-    await onCreateNodeGoogleDocs({
-      node,
-      actions,
-      store,
-      cache,
-      createNodeId,
-      createContentDigest,
-      reporter,
-    })
+    await onCreateNodeGoogleDocs(args)
   }
 
   if (node.internal.type === "MarkdownRemark") {
-    await onCreateNodeMarkdownRemark({
-      node,
-      actions,
-      cache,
-    })
+    await onCreateNodeMarkdownRemark(args)
   }
 }
