@@ -23,6 +23,7 @@
   ],
   "dependencies": {
     "@forivall/wyt": "^2.0.2",
+    "escape-string-regexp": "^4.0.0",
     "gatsby-source-filesystem": "^2.3.32",
     "google-oauth2-env-vars": "^1.1.0",
     "googleapis": "60.0.1",

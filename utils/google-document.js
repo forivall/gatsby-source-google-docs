@@ -2,6 +2,7 @@ const json2md = require("json2md")
 const yamljs = require("yamljs")
 const _get = require("lodash/get")
 const _repeat = require("lodash/repeat")
+const escapeRegexp = require("escape-string-regexp")
 
 const {isCodeBlocks, isQuote} = require("./google-document-types")
 
@@ -462,7 +463,11 @@ class GoogleDocument {
 
       Object.keys(this.crosslinksPaths).forEach((id) => {
         elementsStringify = elementsStringify.replace(
-          `https://docs.google.com/document/d/${id}`,
+          new RegExp(
+            `https://docs\\.google\\.com/document/(?:u/\\d+/)?d\\/${escapeRegexp(
+              id
+            )}(?:/edit)?`
+          ),
           this.crosslinksPaths[id]
         )
       })
