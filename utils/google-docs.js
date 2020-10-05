@@ -29,7 +29,7 @@ const replaceCrossDocumentsLinksbyRelativePaths = ({
   let newMarkdown = markdown.slice()
 
   const googleDocsUrlsMatches = markdown.matchAll(
-    /https:\/\/docs.google.com\/document\/d\/([a-zA-Z0-9_-]+)/g
+    /https:\/\/docs.google.com\/document\/(?:u\/\d+\/)?d\/([a-zA-Z0-9_-]+)/g
   )
 
   for (const [url, id] of googleDocsUrlsMatches) {
