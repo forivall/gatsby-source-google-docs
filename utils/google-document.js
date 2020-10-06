@@ -6,19 +6,30 @@ const escapeRegexp = require("escape-string-regexp")
 
 const {isCodeBlocks, isQuote} = require("./google-document-types")
 
-const HORIZONTAL_TAB_CHAR = "\x09"
+const HORIZONTAL_TAB_CHAR = "&#09;" // "\x09"
 const GOOGLE_DOCS_INDENT = 18
 
 class GoogleDocument {
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Document} document
+   * @param {import("..").Options & { crosslinksPaths?: {[id: string]: string}}} options
+   */
   constructor(document, metadata = {}, options = {}) {
     this.document = document
     this.metadata = metadata
     this.demoteHeadings = options.demoteHeadings || false
+    this.indentedBlockquotes = options.indentedBlockquotes || false
     this.crosslinksPaths = options.crosslinksPaths || {}
     this.cover = null
+    /** @type {import("..").Json2MdElement[]} */
     this.elements = []
+    /** @type {(import("..").Json2MdHeading & { index: number })[]} */
     this.headings = []
+    /** @type {Record<string, string>} */
     this.footnotes = {}
+
+    /** @type {number | null} */
+    this.firstIndentLevel = null
 
     // Keep the class scope in loops
     this.formatText = this.formatText.bind(this)
@@ -26,6 +37,7 @@ class GoogleDocument {
     this.process()
   }
 
+  /** @param {import('googleapis').docs_v1.Schema$ParagraphElement} el */
   getImage(el) {
     const {inlineObjects} = this.document
 
@@ -51,6 +63,7 @@ class GoogleDocument {
       return
     }
 
+    /** @type {import('googleapis').docs_v1.Schema$ParagraphElement} */
     const headerElement = _get(headers[firstPageHeaderId], [
       "content",
       0,
@@ -70,13 +83,17 @@ class GoogleDocument {
     }
   }
 
+  /** @param {import('googleapis').docs_v1.Schema$StructuralElement[]} content */
   getTableCellContent(content) {
     return content
-      .map(({paragraph}) => paragraph.elements.map(this.formatText).join(""))
+      .map(({paragraph}) =>
+        paragraph.elements.map((el) => this.formatText(el)).join("")
+      )
       .join("")
       .replace(/\n/g, "<br/>") // Replace newline characters by <br/> to avoid multi-paragraphs
   }
 
+  /** @param {import('googleapis').docs_v1.Schema$ParagraphElement} el */
   formatText(el, {withBold = true} = {}) {
     if (el.inlineObjectElement) {
       const image = this.getImage(el)
@@ -140,7 +157,7 @@ class GoogleDocument {
       text = `_${text}_`
     }
 
-    if (bold & withBold) {
+    if (bold && withBold) {
       text = `**${text}**`
     }
 
@@ -154,17 +171,36 @@ class GoogleDocument {
       return `[${fullText}](${link.url})`
     }
 
+    // Avoid code blocks
+    if (fullText[0] === "\t") {
+      return "&#9;" + fullText.slice(1)
+    } else if (fullText.match(/^ {4}/)) {
+      return "&#20;" + fullText.slice(1)
+    }
+
     return fullText
   }
 
+  /**
+   * @param {string} text
+   * @param {number} level
+   */
   indentText(text, level) {
     return `${_repeat(HORIZONTAL_TAB_CHAR, level)}${text}`
   }
 
+  /** @param {string[]} tagContent */
   stringifyContent(tagContent) {
     return tagContent.join("").replace(/\n$/, "")
   }
 
+  /**
+   * @param {object} arg
+   * @param {any[]} arg.list
+   * @param {any} arg.listItem
+   * @param {number=} arg.elementLevel
+   * @param {number} arg.level
+   */
   appendToList({list, listItem, elementLevel, level}) {
     const lastItem = list[list.length - 1]
 
@@ -187,6 +223,10 @@ class GoogleDocument {
     }
   }
 
+  /**
+   * @param {string} listId
+   * @param {number} level
+   */
   getListTag(listId, level) {
     const glyph = _get(this.document, [
       "lists",
@@ -200,6 +240,10 @@ class GoogleDocument {
     return glyph ? "ol" : "ul"
   }
 
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Paragraph} paragraph
+   * @param {number} index
+   */
   processList(paragraph, index) {
     const prevListId = _get(this.document, [
       "body",
@@ -211,7 +255,9 @@ class GoogleDocument {
     ])
     const isPrevList = prevListId === paragraph.bullet.listId
     const prevList = _get(this.elements, [this.elements.length - 1, "value"])
-    const text = this.stringifyContent(paragraph.elements.map(this.formatText))
+    const text = this.stringifyContent(
+      paragraph.elements.map((el) => this.formatText(el))
+    )
 
     if (isPrevList && Array.isArray(prevList)) {
       const {nestingLevel} = paragraph.bullet
@@ -237,7 +283,12 @@ class GoogleDocument {
     }
   }
 
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Paragraph} paragraph
+   * @param {number} index
+   */
   processParagraph(paragraph, index) {
+    /** @type {import("..").Json2MdHeading[]} */
     const headings = []
     const tags = {
       NORMAL_TEXT: "p",
@@ -249,7 +300,8 @@ class GoogleDocument {
       HEADING_5: "h5",
       HEADING_6: "h6",
     }
-    const tag = tags[paragraph.paragraphStyle.namedStyleType]
+    /** @type {'p' | 'blockquote' | 'h1' | 'h2' | 'h3' | 'h4' | 'h5' | 'h6'} */
+    let tag = tags[paragraph.paragraphStyle.namedStyleType]
 
     // Lists
     if (paragraph.bullet) {
@@ -273,7 +325,7 @@ class GoogleDocument {
       }
 
       // Headings
-      else if (tag !== "p") {
+      else if (tag !== "p" && tag !== "blockquote") {
         const text = this.formatText(el, {
           withBold: false,
         })
@@ -302,11 +354,18 @@ class GoogleDocument {
     let content = this.stringifyContent(tagContentArray)
     let tagIndentLevel = 0
 
-    if (paragraph.paragraphStyle.indentStart) {
-      const {magnitude} = paragraph.paragraphStyle.indentStart
-      tagIndentLevel = Math.round(magnitude / GOOGLE_DOCS_INDENT)
+    const indentStart = paragraph.paragraphStyle.indentStart
+    if (indentStart) {
+      tagIndentLevel = Math.round(indentStart.magnitude / GOOGLE_DOCS_INDENT)
+    }
+    if (this.firstIndentLevel === null) {
+      this.firstIndentLevel = tagIndentLevel
     }
 
+    if (this.indentedBlockquotes && tagIndentLevel > this.firstIndentLevel) {
+      tag = "blockquote"
+      content = this.deleteSmartQuotes(content)
+    }
     if (tagIndentLevel > 0) {
       content = this.indentText(content, tagIndentLevel)
     }
@@ -323,15 +382,28 @@ class GoogleDocument {
     })
   }
 
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Table} table
+   */
   processQuote(table) {
     const firstRow = table.tableRows[0]
     const firstCell = firstRow.tableCells[0]
     const quote = this.getTableCellContent(firstCell.content)
-    const blockquote = quote.replace(/“|”/g, "") // Delete smart-quotes
+    const blockquote = this.deleteSmartQuotes(quote)
 
     this.elements.push({type: "blockquote", value: blockquote})
   }
 
+  /**
+   * @param {string} text
+   */
+  deleteSmartQuotes(text) {
+    return text.replace(/“|”/g, "")
+  }
+
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Table} table
+   */
   processCode(table) {
     const firstRow = table.tableRows[0]
     const firstCell = firstRow.tableCells[0]
@@ -364,6 +436,9 @@ class GoogleDocument {
     })
   }
 
+  /**
+   * @param {import('googleapis').docs_v1.Schema$Table} table
+   */
   processTable(table) {
     const [thead, ...tbody] = table.tableRows
 
@@ -381,6 +456,7 @@ class GoogleDocument {
   }
 
   processFootnotes() {
+    /** @type {import('..').Json2MdElements['footnote'][]} */
     const footnotes = []
     const documentFootnotes = this.document.footnotes
 
@@ -388,7 +464,7 @@ class GoogleDocument {
 
     Object.entries(documentFootnotes).forEach(([, value]) => {
       const paragraphElements = value.content[0].paragraph.elements
-      const tagContentArray = paragraphElements.map(this.formatText)
+      const tagContentArray = paragraphElements.map((el) => this.formatText(el))
       const tagContentString = this.stringifyContent(tagContentArray)
 
       footnotes.push({
