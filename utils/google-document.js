@@ -94,6 +94,13 @@ class GoogleDocument {
 
   /** @param {import('googleapis').docs_v1.Schema$ParagraphElement} el */
   formatText(el, {withBold = true} = {}) {
+    // Footnotes
+    if (el.footnoteReference) {
+      this.footnotes[el.footnoteReference.footnoteId] =
+        el.footnoteReference.footnoteNumber
+      return `[^${el.footnoteReference.footnoteNumber}]`
+    }
+
     if (el.inlineObjectElement) {
       const image = this.getImage(el)
       return `![${image.alt}](${image.source} "${image.title}")`
@@ -312,13 +319,6 @@ class GoogleDocument {
       // <hr />
       if (el.horizontalRule) {
         tagContentArray.push("<hr/>")
-      }
-
-      // Footnotes
-      else if (el.footnoteReference) {
-        tagContentArray.push(`[^${el.footnoteReference.footnoteNumber}]`)
-        this.footnotes[el.footnoteReference.footnoteId] =
-          el.footnoteReference.footnoteNumber
       }
 
       // Headings
