@@ -41,7 +41,7 @@ _italic_
 text with **space bold after** and _space italic before_.
 
 
-		indented text
+&#09;&#09;indented text
 
 
 [Link](https://github.com/cedricdelpoux/gatsby-source-google-docs)

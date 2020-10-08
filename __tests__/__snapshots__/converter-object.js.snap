@@ -308,7 +308,7 @@ Object {
     },
     Object {
       "type": "p",
-      "value": "		indented text",
+      "value": "&#09;&#09;indented text",
     },
     Object {
       "type": "p",
