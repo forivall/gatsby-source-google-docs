@@ -35,6 +35,10 @@ export interface Options {
    */
   ignoredFolders?: string[]
   /**
+   * To ignore some folder in the tree
+   */
+  ignoreFolderTest?: (folder: RawFolder) => boolean
+  /**
    * Compute extra data for each document
    */
   updateMetadata?: (metadata: any) => any

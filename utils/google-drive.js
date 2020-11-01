@@ -141,7 +141,13 @@ async function fetchDocuments({drive, parents, ...options}) {
       )
     )
   }
-  const {debug, fields, ignoredFolders = [], listImages} = options
+  const {
+    debug,
+    fields,
+    ignoredFolders = [],
+    ignoreFolderTest = () => false,
+    listImages,
+  } = options
 
   const waited = await rateLimit()
   if (debug) {
@@ -167,9 +173,11 @@ async function fetchDocuments({drive, parents, ...options}) {
   }
   const mimetypeQuery = mimetypeFilters.join(" or ")
 
+  /** @type {import('googleapis').drive_v3.Params$Resource$Files$List} */
   const query = {
     includeTeamDriveItems: true,
     supportsAllDrives: true,
+    pageSize: 1000,
     q: `${
       parentQuery ? `(${parentQuery}) and ` : ""
     }(${mimetypeQuery}) and trashed = false`,
@@ -177,19 +185,28 @@ async function fetchDocuments({drive, parents, ...options}) {
       fields ? `, ${fields.join(", ")}` : ""
     })`,
   }
+  if (debug) {
+    console.info("source-google-docs: ", mimetypeQuery)
+  }
   const res = await drive.files.list(query)
   let documents = res.data.files.filter(isDocument)
 
   /** @param {typeof res.data.files} files */
   const addImagesToParents = (files) => {
+    let n = 0
     for (const file of files) {
       if (file.mimeType.startsWith(MIME_TYPE_IMAGE_PREFIX)) {
         const parentIds = file.parents && new Set(file.parents)
         const parent = parentIds && parents.find((p) => parentIds.has(p.id))
         if (parent) {
           ;(parent.images || (parent.images = [])).push(file)
+        } else {
+          console.warn("No parent found for image!", file.id)
         }
       }
+    }
+    if (n && debug) {
+      console.info(`source-google-docs: Added ${n} images`)
     }
   }
   addImagesToParents(res.data.files)
@@ -201,7 +218,7 @@ async function fetchDocuments({drive, parents, ...options}) {
     const parentPath = (parent && parent.path) || ""
     return {
       ...file,
-      images: parent.images,
+      parentImages: parent.images,
       path: `${parentPath}/${_kebabCase(file.name)}`,
       parentPath,
       rawParentPath: parent.breadcrumb.join("/"),
@@ -219,6 +236,7 @@ async function fetchDocuments({drive, parents, ...options}) {
       (folder) =>
         !(
           folder.name.toLowerCase() === "drafts" ||
+          ignoreFolderTest(folder) ||
           ignoredFolders.includes(folder.name) ||
           ignoredFolders.includes(folder.id)
         )
